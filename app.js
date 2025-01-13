@@ -1,10 +1,9 @@
-// Install dependencies first:
-// npm install express body-parser socket.io
-
 const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
 const bodyParser = require('body-parser');
+const fs = require('fs');
+const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
@@ -12,11 +11,42 @@ const io = socketIo(server);
 
 const PORT = 80;
 let isListening = false;
+const EVENTS_FILE = path.join(__dirname, 'database', 'events.json');
+let receivedEvents = [];
 
-// Middleware to parse JSON data
+// Ensure /database folder exists
+if (!fs.existsSync(path.dirname(EVENTS_FILE))) {
+  fs.mkdirSync(path.dirname(EVENTS_FILE), { recursive: true });
+}
+
+// Ensure events.json exists or create it
+if (!fs.existsSync(EVENTS_FILE)) {
+  fs.writeFileSync(EVENTS_FILE, JSON.stringify([]));
+}
+
+// Load existing events from file on startup
+if (fs.existsSync(EVENTS_FILE)) {
+  const data = fs.readFileSync(EVENTS_FILE, 'utf-8');
+  try {
+    receivedEvents = JSON.parse(data);
+  } catch (err) {
+    console.error('Failed to parse events.json:', err);
+    receivedEvents = [];
+  }
+}
+
 app.use(bodyParser.json());
 
-// Serve a simple UI
+// Function to save events to file
+function saveEventsToFile() {
+  fs.writeFile(EVENTS_FILE, JSON.stringify(receivedEvents, null, 2), (err) => {
+    if (err) {
+      console.error('Error saving events:', err);
+    }
+  });
+}
+
+// Serve the UI with embedded HTML and JavaScript
 app.get('/', (req, res) => {
   res.send(`
     <!DOCTYPE html>
@@ -45,10 +75,11 @@ app.get('/', (req, res) => {
         const socket = io();
 
         function startServer() {
-          fetch('/start').then(res => res.text()).then(msg => alert(msg));
+          fetch('/start').then(res => res.text()).then(alert);
         }
+
         function stopServer() {
-          fetch('/stop').then(res => res.text()).then(msg => alert(msg));
+          fetch('/stop').then(res => res.text()).then(alert);
         }
 
         socket.on('status', status => {
@@ -60,23 +91,52 @@ app.get('/', (req, res) => {
           li.textContent = JSON.stringify(event, null, 2);
           document.getElementById('eventList').prepend(li);
         });
+
+        fetch('/events')
+          .then(res => res.json())
+          .then(events => {
+            events.forEach(event => {
+              const li = document.createElement('li');
+              li.textContent = JSON.stringify(event, null, 2);
+              document.getElementById('eventList').prepend(li);
+            });
+          });
+
+        fetch('/status')
+          .then(res => res.json())
+          .then(data => {
+            document.getElementById('status').innerHTML = 'Status: <strong>' + data.status + '</strong>';
+          });
       </script>
     </body>
     </html>
   `);
 });
 
-// Start listening for event notifications on any endpoint
+// Endpoint to retrieve stored events
+app.get('/events', (req, res) => {
+  res.json(receivedEvents);
+});
+
+// Endpoint to retrieve current server status
+app.get('/status', (req, res) => {
+  res.json({ status: isListening ? 'Listening' : 'Stopped' });
+});
+
+// Handle event notifications on any endpoint
 app.post('*', (req, res) => {
   if (!isListening) {
     return res.status(403).send('Server is not listening for events.');
   }
+  const event = { path: req.path, data: req.body };
   console.log(`Received Event on ${req.path}:`, req.body);
-  io.emit('event', { path: req.path, data: req.body });
+  receivedEvents.push(event);
+  saveEventsToFile();
+  io.emit('event', event);
   res.status(200).send('Success');
 });
 
-// Start listening
+// Start the listener
 app.get('/start', (req, res) => {
   if (!isListening) {
     isListening = true;
@@ -87,7 +147,7 @@ app.get('/start', (req, res) => {
   }
 });
 
-// Stop listening
+// Stop the listener
 app.get('/stop', (req, res) => {
   if (isListening) {
     isListening = false;
@@ -98,7 +158,6 @@ app.get('/stop', (req, res) => {
   }
 });
 
-// Start the server
 server.listen(PORT, () => {
-  console.log(`Server running at http://localhost:${PORT}`);
+  console.log(`Server running at http://localhost`);
 });
