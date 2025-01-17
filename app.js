@@ -128,8 +128,12 @@ app.post('*', (req, res) => {
   if (!isListening) {
     return res.status(403).send('Server is not listening for events.');
   }
-  const event = { path: req.path, data: req.body };
-  console.log(`Received Event on ${req.path}:`, req.body);
+  const event = {
+    path: req.path,
+    headers: req.headers,
+    data: req.body
+  };
+  console.log(`Received Event on ${req.path}:`, event);
   receivedEvents.push(event);
   saveEventsToFile();
   io.emit('event', event);
